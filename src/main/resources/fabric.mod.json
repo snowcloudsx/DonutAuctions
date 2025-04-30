@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "donutauctions",
+  "version": "${version}",
+  "name": "DonutAuctions",
+  "description": "",
+  "authors": [],
+  "contact": {},
+  "license": "All-Rights-Reserved",
+  "icon": "assets/donutauctions/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "tk.jandev.donutauctions.DonutAuctions"
+    ]
+  },
+  "mixins": [
+    "donutauctions.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "fabric": "*",
+    "minecraft": "${minecraft_version}"
+  }
+}
