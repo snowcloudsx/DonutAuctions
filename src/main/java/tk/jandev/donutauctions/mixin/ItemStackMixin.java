@@ -10,9 +10,11 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.item.tooltip.TooltipType;
 import net.minecraft.text.Text;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import tk.jandev.donutauctions.DonutAuctions;
 import tk.jandev.donutauctions.scraper.cache.ItemCache;
 
 import java.util.function.Consumer;
@@ -20,6 +22,8 @@ import java.util.function.Consumer;
 @Environment(EnvType.CLIENT)
 @Mixin(ItemStack.class)
 public abstract class ItemStackMixin {
+    @Shadow public abstract int getCount();
+
     @Inject(
             method = "appendTooltip",
             at = @At(
@@ -30,6 +34,8 @@ public abstract class ItemStackMixin {
             )
     )
     public void appendAfterLore(Item.TooltipContext context, TooltipDisplayComponent displayComponent, PlayerEntity player, TooltipType type, Consumer<Text> textConsumer, CallbackInfo ci) {
-        textConsumer.accept(ItemCache.getInstance().getPrice((ItemStack) (Object) this).getMessage());
+        if (DonutAuctions.getInstance().shouldRenderItem((ItemStack) (Object) (this))) {
+            textConsumer.accept(ItemCache.getInstance().getPrice((ItemStack) (Object) this).getMessage(getCount()));
+        }
     }
 }

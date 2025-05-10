@@ -3,6 +3,8 @@ package tk.jandev.donutauctions;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.network.ServerInfo;
+import net.minecraft.item.ItemStack;
 import net.minecraft.text.Text;
 import tk.jandev.donutauctions.config.SingleValueFile;
 import tk.jandev.donutauctions.scraper.cache.ItemCache;
@@ -16,7 +18,9 @@ import java.util.regex.Pattern;
 public class DonutAuctions implements ClientModInitializer {
     private static DonutAuctions donutAuctions;
     private SingleValueFile apiKeyConfig;
+    private final MinecraftClient mc = MinecraftClient.getInstance();
     private final Pattern API_TOKEN_PATTERN = Pattern.compile("Your API Token is: (\\w{32})");
+    private final Pattern DONUTSMP_DOMAIN_PATTERN = Pattern.compile("^([a-z0-9-]+\\.)*donutsmp\\.net$", Pattern.CASE_INSENSITIVE);
 
     private ItemCache itemCache;
     @Override
@@ -30,6 +34,7 @@ public class DonutAuctions implements ClientModInitializer {
         tryReadAPI();
 
         ClientReceiveMessageEvents.GAME.register((text, b) -> {
+            if (!clientIsOnDonutSMP()) return;
             Matcher matcher = API_TOKEN_PATTERN.matcher(text.getString());
 
             if (matcher.find()) {
@@ -66,6 +71,27 @@ public class DonutAuctions implements ClientModInitializer {
 
         }
     }
+
+    public boolean shouldRenderItem(ItemStack stack) {
+        if (mc.player == null) return false;
+        if (!clientIsOnDonutSMP()) return false;
+        if (mc.player.getInventory().contains(stack)) return true;
+        return mc.player.currentScreenHandler.getStacks().contains(stack);
+    }
+
+
+    public boolean clientIsOnDonutSMP() {
+        if (mc.getCurrentServerEntry() != null) {
+            ServerInfo info = mc.getCurrentServerEntry();
+            String address = info.address;
+
+            Matcher matcher = DONUTSMP_DOMAIN_PATTERN.matcher(address);
+            return (matcher.matches());
+        }
+
+        return false;
+    }
+
 
     public static DonutAuctions getInstance() {
         return donutAuctions;

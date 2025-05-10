@@ -48,7 +48,10 @@ public class AuctionScraper {
                 if (useTrims && !matchesTrim(item.getAsJsonObject("enchants"), targetTrim)) { // we are currently ignoring trims, but if we ever stop doing so..
                     continue;
                 }
-                return auction.get("price").getAsLong();
+
+                long price = auction.get("price").getAsLong();
+                int count = auction.get("count").getAsInt();
+                return price / count;
             }
 
             page++;
