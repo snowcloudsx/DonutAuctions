@@ -1,10 +1,6 @@
 package tk.jandev.donutauctions.mixin;
 
-import java.text.DecimalFormat;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import net.minecraft.client.MinecraftClient;
@@ -21,174 +17,136 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import tk.jandev.donutauctions.scraper.cache.ItemCache;
+import tk.jandev.donutauctions.scraper.cache.ItemCache.CacheResult;
+import tk.jandev.donutauctions.util.FormattingUtil;
 
 @Mixin(HandledScreen.class)
 public class HandledScreenMixin {
 
-    private static final Pattern WORTH_PATTERN =
-            Pattern.compile("Worth: \\$(\\d+(?:\\.\\d+)?)([kKmMbB]?)");
-    private static final Pattern AUCTION_PATTERN =
-            Pattern.compile("Auction.?Value: \\$(\\d+(?:\\.\\d+)?)([kKmMbB]?)");
+    private static final Pattern WORTH_PATTERN = Pattern.compile("Worth: \\$(\\d+(?:\\.\\d+)?)([kKmMbB]?)");
 
     @Inject(method = "drawForeground(Lnet/minecraft/client/gui/DrawContext;II)V", at = @At("TAIL"))
     private void drawOverlay(DrawContext context, int mouseX, int mouseY, CallbackInfo ci) {
         MinecraftClient client = MinecraftClient.getInstance();
-
-        // Check if current screen is a container screen (chest or shulker box)
-        if (!(client.currentScreen instanceof GenericContainerScreen)
-                && !(client.currentScreen instanceof ShulkerBoxScreen)) {
-            return;
-        }
-
-        if (client.player == null) {
-            return;
-        }
+        if (!(client.currentScreen instanceof GenericContainerScreen || client.currentScreen instanceof ShulkerBoxScreen)) return;
+        if (client.player == null) return;
 
         HandledScreen<?> screen = (HandledScreen<?>) client.currentScreen;
-
-        double totalSellWorth = 0;
-        double totalAuctionWorth = 0;
-        Map<String, double[]> itemMap = new HashMap<>(); // [count, sellWorth, auctionWorth]
-
         ClientPlayerEntity player = client.player;
         Item.TooltipContext tooltipContext = Item.TooltipContext.DEFAULT;
 
-        // Process only container items (not player inventory)
-        // Generic containers and shulker boxes have container slots first, then player inventory
-        int containerSlots;
-        if (client.currentScreen instanceof ShulkerBoxScreen) {
-            containerSlots = 27; // Shulker boxes have 27 slots
-        } else {
-            containerSlots = screen.getScreenHandler().slots.size() - 36; // 36 = player inventory slots
-        }
+        double totalSellWorth = 0;
+        double totalAuctionWorth = 0;
+        Map<String, double[]> itemMap = new HashMap<>(); // name -> [count, sellWorth, auctionWorth]
+
+        int containerSlots = (screen instanceof ShulkerBoxScreen) ? 27 : screen.getScreenHandler().slots.size() - 36;
 
         for (int i = 0; i < containerSlots; i++) {
             ItemStack stack = screen.getScreenHandler().slots.get(i).getStack();
-            if (stack.isEmpty()) {
-                continue;
-            }
+            if (stack.isEmpty()) continue;
+
+            int count = stack.getCount();
+            String itemName = stack.getName().getString();
 
             double itemSellWorth = 0;
             double itemAuctionWorth = 0;
-            String itemName = stack.getName().getString();
 
+            // Parse lore for /sell price
             List<Text> tooltips = stack.getTooltip(tooltipContext, player, TooltipType.BASIC);
             for (Text line : tooltips) {
                 String raw = line.getString();
-
-                Matcher m1 = WORTH_PATTERN.matcher(raw);
-                Matcher m2 = AUCTION_PATTERN.matcher(raw);
-
-                if (m1.find()) {
-                    itemSellWorth += parseWorth(m1.group(1), m1.group(2));
-                }
-                if (m2.find()) {
-                    itemAuctionWorth += parseWorth(m2.group(1), m2.group(2));
+                Matcher m = WORTH_PATTERN.matcher(raw);
+                if (m.find()) {
+                    itemSellWorth += parseWorth(m.group(1), m.group(2)) * count;
                 }
             }
 
-            if (itemSellWorth > 0 || itemAuctionWorth > 0) {
-                totalSellWorth += itemSellWorth;
-                totalAuctionWorth += itemAuctionWorth;
-
-                // Group items by name
-                if (itemMap.containsKey(itemName)) {
-                    double[] existing = itemMap.get(itemName);
-                    existing[0]++; // count
-                    existing[1] += itemSellWorth; // total sell worth
-                    existing[2] += itemAuctionWorth; // total auction worth
-                } else {
-                    itemMap.put(itemName, new double[] {1, itemSellWorth, itemAuctionWorth});
-                }
+            // Get auction price from ItemCache
+            CacheResult result = ItemCache.getInstance().getPrice(stack);
+            if (result.hasData()) {
+                itemAuctionWorth = result.priceData() * count;
             }
+
+            totalSellWorth += itemSellWorth;
+            totalAuctionWorth += itemAuctionWorth;
+
+            itemMap.merge(itemName, new double[]{count, itemSellWorth, itemAuctionWorth}, (oldVal, newVal) -> {
+                oldVal[0] += newVal[0];
+                oldVal[1] += newVal[1];
+                oldVal[2] += newVal[2];
+                return oldVal;
+            });
         }
 
-        // Convert to list and sort by maximum worth (descending)
-        List<Map.Entry<String, double[]>> itemWorths = new ArrayList<>(itemMap.entrySet());
-        itemWorths.sort(
-                (a, b) -> {
-                    double maxA = Math.max(a.getValue()[1], a.getValue()[2]);
-                    double maxB = Math.max(b.getValue()[1], b.getValue()[2]);
-                    return Double.compare(maxB, maxA);
-                });
+        // Sort by max(sell, auction)
+        List<Map.Entry<String, double[]>> sortedItems = new ArrayList<>(itemMap.entrySet());
+        sortedItems.sort((a, b) -> Double.compare(
+                Math.max(b.getValue()[1], b.getValue()[2]),
+                Math.max(a.getValue()[1], a.getValue()[2])
+        ));
 
         int lineHeight = 10;
-
-        // Draw totals in top left corner (outside chest GUI)
         int totalX = -150;
         int totalY = -80;
 
-        context.drawText(
-                client.textRenderer, Text.literal("Total Worth:"), totalX, totalY, 0xFFFFFF, true);
+        context.drawText(client.textRenderer, Text.literal("Total Worth:"), totalX, totalY, 0xFFFFFF, true);
         totalY += lineHeight;
 
         context.drawText(
                 client.textRenderer,
-                Text.literal("/Sell: $" + formatValue(totalSellWorth)),
+                Text.literal("/Sell: $" + FormattingUtil.formatCurrency((long) totalSellWorth)),
                 totalX,
                 totalY,
                 0xFFFFFF,
-                true);
+                true
+        );
         totalY += lineHeight;
 
         context.drawText(
                 client.textRenderer,
-                Text.literal("Auction: $" + formatValue(totalAuctionWorth)),
+                Text.literal("Auction: $" + FormattingUtil.formatCurrency((long) totalAuctionWorth)),
                 totalX,
                 totalY,
                 0xFFFFFF,
-                true);
+                true
+        );
         totalY += lineHeight;
 
-        // Draw breakdown below the totals with some spacing
+        // Breakdown
         int breakdownX = totalX;
-        int breakdownY = totalY + 10; // Add some spacing between totals and breakdown
+        int breakdownY = totalY + 10;
 
-        context.drawText(
-                client.textRenderer,
-                Text.literal("Item Breakdown:"),
-                breakdownX,
-                breakdownY,
-                0xFFFFFF,
-                true);
+        context.drawText(client.textRenderer, Text.literal("Item Breakdown:"), breakdownX, breakdownY, 0xFFFFFF, true);
         int currentY = breakdownY + lineHeight;
 
-        // Draw top items (limit to prevent overflow)
-        int maxItems = Math.min(itemWorths.size(), 6);
+        int maxItems = Math.min(sortedItems.size(), 6);
         for (int i = 0; i < maxItems; i++) {
-            Map.Entry<String, double[]> entry = itemWorths.get(i);
-            String itemName = entry.getKey();
-            double[] data = entry.getValue();
+            String name = sortedItems.get(i).getKey();
+            double[] data = sortedItems.get(i).getValue();
             int count = (int) data[0];
-            double maxWorth = Math.max(data[1], data[2]);
+            double sell = data[1];
+            double auction = data[2];
 
-            // Truncate item name if too long
-            String displayName = itemName;
-            if (displayName.length() > 15) {
-                displayName = displayName.substring(0, 12) + "...";
-            }
+            double max = Math.max(sell, auction);
+            String displayName = name.length() > 15 ? name.substring(0, 12) + "..." : name;
+            String itemLine = count > 1
+                    ? displayName + " x" + count + " [$" + FormattingUtil.formatCurrency((long) max) + "]"
+                    : displayName + " [$" + FormattingUtil.formatCurrency((long) max) + "]";
 
-            String itemLine;
-            if (count > 1) {
-                itemLine = displayName + " x" + count + " [" + formatValue(maxWorth) + "]";
-            } else {
-                itemLine = displayName + " [" + formatValue(maxWorth) + "]";
-            }
-
-            context.drawText(
-                    client.textRenderer, Text.literal(itemLine), breakdownX, currentY, 0xFFFFFF, true);
+            context.drawText(client.textRenderer, Text.literal(itemLine), breakdownX, currentY, 0xFFFFFF, true);
             currentY += lineHeight;
         }
 
-        // Show "..." if there are more items
-        if (itemWorths.size() > maxItems) {
+        if (sortedItems.size() > maxItems) {
             context.drawText(
                     client.textRenderer,
-                    Text.literal("... and " + (itemWorths.size() - maxItems) + " more items"),
+                    Text.literal("... and " + (sortedItems.size() - maxItems) + " more items"),
                     breakdownX,
                     currentY,
                     0xAAAAAA,
-                    true);
+                    true
+            );
         }
     }
 
@@ -200,18 +158,5 @@ public class HandledScreenMixin {
             case "b" -> base * 1_000_000_000;
             default -> base;
         };
-    }
-
-    private String formatValue(double value) {
-        if (value >= 1_000_000_000) {
-            return new DecimalFormat("#.##").format(value / 1_000_000_000) + "B";
-        }
-        if (value >= 1_000_000) {
-            return new DecimalFormat("#.##").format(value / 1_000_000) + "M";
-        }
-        if (value >= 1_000) {
-            return new DecimalFormat("#.##").format(value / 1_000) + "K";
-        }
-        return new DecimalFormat("#.##").format(value);
     }
 }
